@@ -30,21 +30,18 @@ except:
 # USER ID MANAGEMENT
 # -------------------------------------------------
 if "user_id" not in st.session_state:
-    # Try to get from browser cookie, otherwise create new
-    user_id_html = st.components.v1.html(
-        """
-        <script>
-        let userId = localStorage.getItem("debt_tracker_user_id");
-        if (!userId) {
-            userId = 'user_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-            localStorage.setItem("debt_tracker_user_id", userId);
-        }
-        document.write(userId);
-        </script>
-        """,
-        height=0,
-    )
-    st.session_state.user_id = user_id_html if user_id_html else f"user_{uuid.uuid4().hex[:12]}"
+    # Generate a unique user ID for this browser session
+    st.session_state.user_id = f"user_{uuid.uuid4().hex[:12]}"
+    
+# Store user ID in browser for persistence across sessions
+st.components.v1.html(
+    f"""
+    <script>
+    localStorage.setItem("debt_tracker_user_id", "{st.session_state.user_id}");
+    </script>
+    """,
+    height=0,
+)
 
 # -------------------------------------------------
 # DATABASE FUNCTIONS
