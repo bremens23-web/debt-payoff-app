@@ -228,31 +228,16 @@ pages = ["📊 Dashboard", "💳 My Credit Cards", "🏦 My Loans", "📈 Payoff
 
 st.sidebar.markdown("### Navigation")
 
-# Custom CSS for menu items
-st.sidebar.markdown("""
-<style>
-    .stButton button {
-        background-color: transparent !important;
-        border: none !important;
-        box-shadow: none !important;
-        text-align: left !important;
-        padding-left: 0 !important;
-        font-size: 16px !important;
-    }
-    .stButton button:hover {
-        background-color: rgba(255, 255, 255, 0.1) !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 for page_name in pages:
     # Add styling for active page
     if st.session_state.current_page == page_name:
-        st.sidebar.markdown(f"**:blue[{page_name}]**")
+        st.sidebar.markdown(f"<div style='padding: 8px 0; font-weight: bold; color: #1f77b4;'>{page_name}</div>", unsafe_allow_html=True)
     else:
-        if st.sidebar.button(page_name, key=f"nav_{page_name}", use_container_width=True):
-            st.session_state.current_page = page_name
-            st.rerun()
+        col1, col2 = st.sidebar.columns([0.01, 1])
+        with col2:
+            if st.button(page_name, key=f"nav_{page_name}", use_container_width=True):
+                st.session_state.current_page = page_name
+                st.rerun()
 
 page = st.session_state.current_page
 
