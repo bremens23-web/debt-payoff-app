@@ -220,10 +220,25 @@ def get_upcoming_bills(debts_list, days_ahead=7):
 # -------------------------------------------------
 st.sidebar.title("💳 Debt Planner")
 
-page = st.sidebar.radio(
-    "Navigation",
-    ["📊 Dashboard", "💳 My Credit Cards", "🏦 My Loans", "📈 Payoff Planner"]
-)
+# Initialize page in session state
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "📊 Dashboard"
+
+pages = ["📊 Dashboard", "💳 My Credit Cards", "🏦 My Loans", "📈 Payoff Planner"]
+
+st.sidebar.markdown("### Navigation")
+
+for page_name in pages:
+    if st.sidebar.button(
+        page_name,
+        key=f"nav_{page_name}",
+        use_container_width=True,
+        type="primary" if st.session_state.current_page == page_name else "secondary"
+    ):
+        st.session_state.current_page = page_name
+        st.rerun()
+
+page = st.session_state.current_page
 
 st.sidebar.divider()
 st.sidebar.caption("💡 **Tip:** Bookmark this page to keep your data!")
