@@ -65,10 +65,15 @@ with st.sidebar:
 def load_debts_from_db():
     """Load debts from Supabase for current user"""
     try:
+        st.write(f"🔍 DEBUG: Loading debts for user_id: {st.session_state.user_id}")
         response = supabase.table("debts").select("*").eq("user_id", st.session_state.user_id).execute()
+        st.write(f"📊 DEBUG: Found {len(response.data)} debts")
+        st.write(f"📋 DEBUG: Data: {response.data}")
         return response.data
     except Exception as e:
         st.error(f"Error loading debts: {e}")
+        import traceback
+        st.error(f"Full traceback: {traceback.format_exc()}")
         return []
 
 def save_debt_to_db(debt):
@@ -76,9 +81,12 @@ def save_debt_to_db(debt):
     try:
         debt["user_id"] = st.session_state.user_id
         response = supabase.table("debts").insert(debt).execute()
+        st.success(f"✅ Saved to database! Response: {response.data}")
         return True
     except Exception as e:
-        st.error(f"Error saving debt: {e}")
+        st.error(f"❌ Error saving debt: {e}")
+        import traceback
+        st.error(f"Full traceback: {traceback.format_exc()}")
         return False
 
 def update_debt_in_db(debt_id, debt):
