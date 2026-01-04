@@ -2,27 +2,53 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from streamlit_local_storage import LocalStorage
+import json
 
 st.set_page_config(page_title="Debt Payoff Planner", layout="wide")
-
 st.title("💳 Debt Payoff Planner")
 
-local_storage = LocalStorage()
+# -------------------------------------------------
+# LOCAL STORAGE HELPERS (JS-based, Cloud-safe)
+# -------------------------------------------------
+def load_from_local_storage(key):
+    result = st.components.v1.html(
+        f"""
+        <script>
+        const data = localStorage.getItem("{key}");
+        document.write(data ? data : "");
+        </script>
+        """,
+        height=0,
+    )
+    return result
 
-# -------------------------
-# LOAD FROM LOCAL STORAGE
-# -------------------------
-stored_debts = local_storage.getItem("debts")
+def save_to_local_storage(key, value):
+    json_value = json.dumps(value)
+    st.components.v1.html(
+        f"""
+        <script>
+        localStorage.setItem("{key}", `{json_value}`);
+        </script>
+        """,
+        height=0,
+    )
 
-if stored_debts and "debts" not in st.session_state:
-    st.session_state.debts = stored_debts
-elif "debts" not in st.session_state:
-    st.session_state.debts = []
+# -------------------------------------------------
+# LOAD DATA
+# -------------------------------------------------
+if "debts" not in st.session_state:
+    stored = load_from_local_storage("debts")
+    if stored:
+        try:
+            st.session_state.debts = json.loads(stored)
+        except:
+            st.session_state.debts = []
+    else:
+        st.session_state.debts = []
 
-# -------------------------
+# -------------------------------------------------
 # ADD DEBT FORM
-# -------------------------
+# -------------------------------------------------
 with st.expander("➕ Add a Debt", expanded=True):
     with st.form("add_debt"):
         name = st.text_input("Debt name")
@@ -46,12 +72,12 @@ with st.expander("➕ Add a Debt", expanded=True):
                 "MinPayment": min_payment,
                 "DueDay": due_day
             })
-            local_storage.setItem("debts", st.session_state.debts)
+            save_to_local_storage("debts", st.session_state.debts)
             st.success("Debt added!")
 
-# -------------------------
-# SHOW DEBTS
-# -------------------------
+# -------------------------------------------------
+# MAIN APP
+# -------------------------------------------------
 if st.session_state.debts:
     df = pd.DataFrame(st.session_state.debts)
 
@@ -111,12 +137,9 @@ if st.session_state.debts:
     calendar["Due"] = calendar["DueDay"].apply(lambda x: f"Every month on the {x}th")
     st.dataframe(calendar, use_container_width=True)
 
-    # -------------------------
-    # CLEAR DATA BUTTON
-    # -------------------------
     if st.button("🗑️ Clear All Data"):
-        local_storage.deleteItem("debts")
         st.session_state.debts = []
+        save_to_local_storage("debts", [])
         st.experimental_rerun()
 
 else:
