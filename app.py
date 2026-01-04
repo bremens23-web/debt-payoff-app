@@ -228,16 +228,34 @@ pages = ["📊 Dashboard", "💳 My Credit Cards", "🏦 My Loans", "📈 Payoff
 
 st.sidebar.markdown("### Navigation")
 
+# CSS to remove button styling and left-align
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] button {
+        background: none !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 8px 0 !important;
+        text-align: left !important;
+        width: 100% !important;
+        color: inherit !important;
+    }
+    [data-testid="stSidebar"] button:hover {
+        background-color: rgba(255, 255, 255, 0.1) !important;
+    }
+    [data-testid="stSidebar"] button p {
+        text-align: left !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 for page_name in pages:
-    # Add styling for active page
     if st.session_state.current_page == page_name:
         st.sidebar.markdown(f"<div style='padding: 8px 0; font-weight: bold; color: #1f77b4;'>{page_name}</div>", unsafe_allow_html=True)
     else:
-        col1, col2 = st.sidebar.columns([0.01, 1])
-        with col2:
-            if st.button(page_name, key=f"nav_{page_name}", use_container_width=True):
-                st.session_state.current_page = page_name
-                st.rerun()
+        if st.sidebar.button(page_name, key=f"nav_{page_name}"):
+            st.session_state.current_page = page_name
+            st.rerun()
 
 page = st.session_state.current_page
 
