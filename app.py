@@ -29,19 +29,35 @@ except:
 # -------------------------------------------------
 # USER ID MANAGEMENT
 # -------------------------------------------------
-if "user_id" not in st.session_state:
-    # Generate a unique user ID for this browser session
-    st.session_state.user_id = f"user_{uuid.uuid4().hex[:12]}"
+def get_user_id():
+    """Get or create a persistent user ID"""
+    # Check if we have a user_id in query params (for sharing)
+    query_params = st.query_params
+    if "user_id" in query_params:
+        return query_params["user_id"]
     
-# Store user ID in browser for persistence across sessions
-st.components.v1.html(
-    f"""
-    <script>
-    localStorage.setItem("debt_tracker_user_id", "{st.session_state.user_id}");
-    </script>
-    """,
-    height=0,
-)
+    # Otherwise, use a generated ID stored in session
+    if "user_id" not in st.session_state:
+        st.session_state.user_id = f"user_{uuid.uuid4().hex[:12]}"
+    
+    return st.session_state.user_id
+
+st.session_state.user_id = get_user_id()
+
+# Display user ID prominently at the top
+st.info(f"🔑 **Your User ID:** `{st.session_state.user_id}` | 💾 Bookmark this page to save your data!")
+
+# Also show in sidebar if available
+with st.sidebar:
+    st.caption("🔑 Your User ID")
+    st.code(st.session_state.user_id, language=None)
+    st.caption("📌 **Important:** Bookmark this page or save your User ID to access your data later!")
+    
+    # Show current URL with user_id
+    st.caption("📎 Your personal link:")
+    base_url = "https://your-app-url.streamlit.app"  # Update this with your actual URL
+    st.code(f"{base_url}?user_id={st.session_state.user_id}", language=None)
+    st.caption("Copy this link to access your data from any device!")
 
 # -------------------------------------------------
 # DATABASE FUNCTIONS
