@@ -224,7 +224,7 @@ st.sidebar.title("💳 Debt Planner")
 if "current_page" not in st.session_state:
     st.session_state.current_page = "📊 Dashboard"
 
-pages = ["📊 Dashboard", "💳 My Credit Cards", "🏦 My Loans", "📈 Payoff Planner"]
+pages = ["📊 Dashboard", "💳 My Credit Cards", "🏦 My Loans", "📄 Bills", "📈 Payoff Planner"]
 
 st.sidebar.markdown("### Navigation")
 
@@ -576,6 +576,170 @@ elif page == "🏦 My Loans":
                         st.rerun()
     else:
         st.info("No loans added yet. Use the form above to add one!")
+
+# -------------------------------------------------
+# PAGE: BILLS
+# -------------------------------------------------
+elif page == "📄 Bills":
+    st.title("📄 Bills")
+    
+    bills = [d for d in st.session_state.debts if d.get("type") == "Bill"]
+    
+    st.markdown("Track recurring bills like utilities, subscriptions, insurance, and other monthly expenses.")
+    
+    # Add bill form
+    with st.expander("➕ Add Bill", expanded=len(bills) == 0):
+        with st.form("add_bill"):
+            name = st.text_input("Bill Name (e.g., Electric, Netflix, Car Insurance)")
+            amount = st.number_input("Monthly Amount ($)", min_value=0.0, format="%.2f")
+            due_day = st.slider("Due Day of Month", 1, 28, 1)
+            category = st.selectbox("Category", ["Utilities", "Subscription", "Insurance", "Phone/Internet", "Rent/Mortgage", "Other"])
+            auto_pay = st.checkbox("Auto-pay enabled")
+            status = st.selectbox("Status", ["Active", "Paused", "Cancelled"])
+            notes = st.text_area("Notes (optional)", placeholder="Add any notes about this bill...")
+            
+            submitted = st.form_submit_button("Add Bill")
+            
+            if submitted and name:
+                new_bill = {
+                    "name": name,
+                    "type": "Bill",
+                    "balance": 0,  # Bills don't have balance
+                    "apr": 0,  # Bills don't have APR
+                    "min_payment": amount,
+                    "due_day": due_day,
+                    "status": status,
+                    "category": category,
+                    "auto_pay": auto_pay,
+                    "notes": notes
+                }
+                if save_debt_to_db(new_bill):
+                    st.success("✅ Bill added!")
+                    st.session_state.reload_debts = True
+                    st.rerun()
+    
+    st.divider()
+    
+    # Display bills
+    if bills:
+        st.subheader("Your Bills")
+        
+        # Calculate total monthly bills
+        total_monthly = sum(b["min_payment"] for b in bills if b.get("status") == "Active")
+        st.metric("Total Monthly Bills", f"${total_monthly:,.2f}")
+        
+        st.divider()
+        
+        for bill in bills:
+            with st.container():
+                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 1.5, 1, 1, 1, 1, 0.6, 0.6])
+                
+                with col1:
+                    auto_icon = "🔄 " if bill.get("auto_pay") else ""
+                    st.write(f"**{auto_icon}{bill['name']}**")
+                with col2:
+                    st.write(bill.get("category", "Other"))
+                with col3:
+                    st.write(f"${bill['min_payment']:,.2f}")
+                with col4:
+                    st.write(f"Day {bill['due_day']}")
+                with col5:
+                    status = bill.get("status", "Active")
+                    if status == "Active":
+                        st.write("🟢 Active")
+                    elif status == "Paused":
+                        st.write("🟡 Paused")
+                    else:
+                        st.write("🔴 Cancelled")
+                with col6:
+                    if bill.get("auto_pay"):
+                        st.write("✓ Auto-pay")
+                    else:
+                        st.write("")
+                with col7:
+                    if st.button("✏️", key=f"edit_bill_{bill['id']}"):
+                        st.session_state.editing_debt = bill
+                        st.rerun()
+                with col8:
+                    if st.button("🗑️", key=f"delete_bill_{bill['id']}"):
+                        if delete_debt_from_db(bill['id']):
+                            st.session_state.reload_debts = True
+                            st.rerun()
+                
+                # Show notes if any
+                if bill.get("notes"):
+                    st.caption(f"💬 {bill['notes']}")
+                
+                st.divider()
+        
+        # Edit form
+        if st.session_state.get("editing_debt") and st.session_state.editing_debt.get("type") == "Bill":
+            bill = st.session_state.editing_debt
+            
+            with st.expander("✏️ Edit Bill", expanded=True):
+                with st.form("edit_bill"):
+                    name = st.text_input("Bill Name", value=bill["name"])
+                    amount = st.number_input("Monthly Amount ($)", min_value=0.0, value=float(bill["min_payment"]), format="%.2f")
+                    due_day = st.slider("Due Day of Month", 1, 28, int(bill["due_day"]))
+                    category = st.selectbox("Category", ["Utilities", "Subscription", "Insurance", "Phone/Internet", "Rent/Mortgage", "Other"],
+                                          index=["Utilities", "Subscription", "Insurance", "Phone/Internet", "Rent/Mortgage", "Other"].index(bill.get("category", "Other")))
+                    auto_pay = st.checkbox("Auto-pay enabled", value=bill.get("auto_pay", False))
+                    status = st.selectbox("Status", ["Active", "Paused", "Cancelled"],
+                                        index=["Active", "Paused", "Cancelled"].index(bill.get("status", "Active")))
+                    notes = st.text_area("Notes (optional)", value=bill.get("notes", ""))
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        save = st.form_submit_button("💾 Save Changes")
+                    with col2:
+                        cancel = st.form_submit_button("❌ Cancel")
+                    
+                    if save and name:
+                        updated_bill = {
+                            "name": name,
+                            "type": "Bill",
+                            "balance": 0,
+                            "apr": 0,
+                            "min_payment": amount,
+                            "due_day": due_day,
+                            "status": status,
+                            "category": category,
+                            "auto_pay": auto_pay,
+                            "notes": notes
+                        }
+                        if update_debt_in_db(bill['id'], updated_bill):
+                            st.success("✅ Changes saved!")
+                            st.session_state.editing_debt = None
+                            st.session_state.reload_debts = True
+                            st.rerun()
+                    
+                    if cancel:
+                        st.session_state.editing_debt = None
+                        st.rerun()
+        
+        # Summary by category
+        st.divider()
+        st.subheader("📊 Bills by Category")
+        
+        category_totals = {}
+        for bill in bills:
+            if bill.get("status") == "Active":
+                cat = bill.get("category", "Other")
+                if cat not in category_totals:
+                    category_totals[cat] = 0
+                category_totals[cat] += bill["min_payment"]
+        
+        if category_totals:
+            fig = px.bar(
+                x=list(category_totals.keys()),
+                y=list(category_totals.values()),
+                labels={'x': 'Category', 'y': 'Monthly Cost ($)'},
+                title="Monthly Bills by Category"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+    else:
+        st.info("No bills added yet. Use the form above to add one!")
 
 # -------------------------------------------------
 # PAGE: PAYOFF PLANNER
