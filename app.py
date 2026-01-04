@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import json
 import plotly.graph_objects as go
@@ -8,8 +8,7 @@ import plotly.express as px
 from supabase import create_client, Client
 import uuid
 
-st.set_page_config(page_title="Debt Payoff Planner", layout="wide")
-st.title("💳 Debt Payoff Planner")
+st.set_page_config(page_title="Debt Payoff Planner", layout="wide", initial_sidebar_state="expanded")
 
 # -------------------------------------------------
 # SUPABASE SETUP
@@ -23,7 +22,7 @@ def init_supabase():
 try:
     supabase: Client = init_supabase()
 except:
-    st.error("⚠️ Database connection failed. Please check your Supabase credentials in secrets.")
+    st.error("⚠️ Database connection failed. Please check your Supabase credentials.")
     st.stop()
 
 # -------------------------------------------------
@@ -31,12 +30,16 @@ except:
 # -------------------------------------------------
 def get_user_id():
     """Get or create a persistent user ID"""
-    # Check if we have a user_id in query params (for sharing)
-    query_params = st.query_params
-    if "user_id" in query_params:
-        return query_params["user_id"]
+    try:
+        query_params = st.query_params
+        if "user_id" in query_params:
+            user_id = query_params["user_id"]
+            if isinstance(user_id, list):
+                user_id = user_id[0]
+            return user_id
+    except Exception as e:
+        pass
     
-    # Otherwise, use a generated ID stored in session
     if "user_id" not in st.session_state:
         st.session_state.user_id = f"user_{uuid.uuid4().hex[:12]}"
     
@@ -44,20 +47,18 @@ def get_user_id():
 
 st.session_state.user_id = get_user_id()
 
-# Display user ID prominently at the top
-st.info(f"🔑 **Your User ID:** `{st.session_state.user_id}` | 💾 Bookmark this page to save your data!")
+# Show user ID only on first load
+if "show_user_id_banner" not in st.session_state:
+    st.session_state.show_user_id_banner = True
 
-# Also show in sidebar if available
-with st.sidebar:
-    st.caption("🔑 Your User ID")
-    st.code(st.session_state.user_id, language=None)
-    st.caption("📌 **Important:** Bookmark this page or save your User ID to access your data later!")
-    
-    # Show current URL with user_id
-    st.caption("📎 Your personal link:")
-    base_url = "https://your-app-url.streamlit.app"  # Update this with your actual URL
-    st.code(f"{base_url}?user_id={st.session_state.user_id}", language=None)
-    st.caption("Copy this link to access your data from any device!")
+if st.session_state.show_user_id_banner:
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        st.info(f"🔑 **Your User ID:** `{st.session_state.user_id}` | 💾 **Bookmark this page to save your data!**")
+    with col2:
+        if st.button("✕ Dismiss", key="dismiss_banner"):
+            st.session_state.show_user_id_banner = False
+            st.rerun()
 
 # -------------------------------------------------
 # DATABASE FUNCTIONS
@@ -65,15 +66,10 @@ with st.sidebar:
 def load_debts_from_db():
     """Load debts from Supabase for current user"""
     try:
-        st.write(f"🔍 DEBUG: Loading debts for user_id: {st.session_state.user_id}")
         response = supabase.table("debts").select("*").eq("user_id", st.session_state.user_id).execute()
-        st.write(f"📊 DEBUG: Found {len(response.data)} debts")
-        st.write(f"📋 DEBUG: Data: {response.data}")
         return response.data
     except Exception as e:
         st.error(f"Error loading debts: {e}")
-        import traceback
-        st.error(f"Full traceback: {traceback.format_exc()}")
         return []
 
 def save_debt_to_db(debt):
@@ -81,12 +77,9 @@ def save_debt_to_db(debt):
     try:
         debt["user_id"] = st.session_state.user_id
         response = supabase.table("debts").insert(debt).execute()
-        st.success(f"✅ Saved to database! Response: {response.data}")
         return True
     except Exception as e:
-        st.error(f"❌ Error saving debt: {e}")
-        import traceback
-        st.error(f"Full traceback: {traceback.format_exc()}")
+        st.error(f"Error saving debt: {e}")
         return False
 
 def update_debt_in_db(debt_id, debt):
@@ -107,13 +100,22 @@ def delete_debt_from_db(debt_id):
         st.error(f"Error deleting debt: {e}")
         return False
 
-def clear_all_debts_from_db():
-    """Delete all debts for current user"""
+def load_payments_from_db():
+    """Load payment history from Supabase"""
     try:
-        response = supabase.table("debts").delete().eq("user_id", st.session_state.user_id).execute()
+        response = supabase.table("payments").select("*").eq("user_id", st.session_state.user_id).execute()
+        return response.data
+    except Exception as e:
+        return []
+
+def save_payment_to_db(payment):
+    """Save payment record to Supabase"""
+    try:
+        payment["user_id"] = st.session_state.user_id
+        response = supabase.table("payments").insert(payment).execute()
         return True
     except Exception as e:
-        st.error(f"Error clearing debts: {e}")
+        st.error(f"Error saving payment: {e}")
         return False
 
 # -------------------------------------------------
@@ -123,18 +125,18 @@ if "debts" not in st.session_state or st.session_state.get("reload_debts"):
     st.session_state.debts = load_debts_from_db()
     st.session_state.reload_debts = False
 
-if "editing_index" not in st.session_state:
-    st.session_state.editing_index = None
+if "payments" not in st.session_state or st.session_state.get("reload_payments"):
+    st.session_state.payments = load_payments_from_db()
+    st.session_state.reload_payments = False
 
 # -------------------------------------------------
-# CALCULATE PAYOFF SCHEDULE
+# CALCULATION FUNCTIONS
 # -------------------------------------------------
-def calculate_payoff_schedule(debts_list, strategy, monthly_budget):
-    """Calculate detailed payoff schedule with monthly snapshots"""
+def calculate_payoff_schedule(debts_list, strategy, monthly_budget, extra_payment_amount=0):
+    """Calculate detailed payoff schedule"""
     if not debts_list:
         return None, 0, 0, []
     
-    # Convert to DataFrame
     df = pd.DataFrame([{
         "Name": d["name"],
         "Type": d["type"],
@@ -155,8 +157,8 @@ def calculate_payoff_schedule(debts_list, strategy, monthly_budget):
     months = 0
     schedule = []
     
-    while balances["Balance"].sum() > 0 and months < 600:  # Safety limit
-        remaining_budget = monthly_budget
+    while balances["Balance"].sum() > 0 and months < 600:
+        remaining_budget = monthly_budget + extra_payment_amount
         month_snapshot = {"Month": months + 1, "Date": current_date.strftime("%b %Y")}
         
         for i, row in balances.iterrows():
@@ -185,267 +187,499 @@ def calculate_payoff_schedule(debts_list, strategy, monthly_budget):
     
     return balances, total_interest, months, schedule
 
-# -------------------------------------------------
-# ADD DEBT FORM
-# -------------------------------------------------
-with st.expander("➕ Add a Debt", expanded=len(st.session_state.debts) == 0):
-    with st.form("add_debt"):
-        name = st.text_input("Debt name")
-        debt_type = st.selectbox(
-            "Debt type",
-            ["Credit Card", "Student Loan", "Auto Loan", "Personal Loan", "Other"]
-        )
-        balance = st.number_input("Balance ($)", min_value=0.0, format="%.2f")
-        apr = st.number_input("APR (%)", min_value=0.0, format="%.2f")
-        min_payment = st.number_input("Minimum Payment ($)", min_value=0.0, format="%.2f")
-        due_day = st.slider("Due day of month", 1, 28, 1)
-
-        submitted = st.form_submit_button("Add Debt")
-
-        if submitted and name:
-            new_debt = {
-                "name": name,
-                "type": debt_type,
-                "balance": balance,
-                "apr": apr / 100,
-                "min_payment": min_payment,
-                "due_day": due_day
-            }
-            if save_debt_to_db(new_debt):
-                st.success("✅ Debt added!")
-                st.session_state.reload_debts = True
-                st.rerun()
-
-# -------------------------------------------------
-# MAIN APP
-# -------------------------------------------------
-if st.session_state.debts:
-    debts_list = st.session_state.debts
+def get_upcoming_bills(debts_list, days_ahead=7):
+    """Get bills due in the next X days"""
+    today = datetime.today()
+    current_day = today.day
+    upcoming = []
     
-    st.subheader("📋 Your Debts")
-    
-    # Display debts with edit/delete buttons
     for debt in debts_list:
-        col1, col2, col3, col4, col5, col6, col7 = st.columns([2, 1.5, 1, 1, 1, 0.8, 0.8])
+        due_day = debt["due_day"]
+        
+        # Calculate next due date
+        if due_day >= current_day:
+            next_due = datetime(today.year, today.month, due_day)
+        else:
+            next_month = today + relativedelta(months=1)
+            next_due = datetime(next_month.year, next_month.month, due_day)
+        
+        days_until = (next_due - today).days
+        
+        if 0 <= days_until <= days_ahead:
+            upcoming.append({
+                "name": debt["name"],
+                "amount": debt["min_payment"],
+                "due_date": next_due,
+                "days_until": days_until
+            })
+    
+    return sorted(upcoming, key=lambda x: x["days_until"])
+
+# -------------------------------------------------
+# SIDEBAR NAVIGATION
+# -------------------------------------------------
+st.sidebar.title("💳 Debt Planner")
+
+page = st.sidebar.radio(
+    "Navigation",
+    ["📊 Dashboard", "💳 My Credit Cards", "🏦 My Loans", "📈 Payoff Planner"]
+)
+
+st.sidebar.divider()
+st.sidebar.caption("💡 **Tip:** Bookmark this page to keep your data!")
+
+# -------------------------------------------------
+# PAGE: DASHBOARD
+# -------------------------------------------------
+if page == "📊 Dashboard":
+    st.title("📊 Dashboard")
+    
+    if not st.session_state.debts:
+        st.info("👋 Welcome! Add your debts using the navigation menu to get started.")
+    else:
+        debts_list = st.session_state.debts
+        
+        # Calculate totals
+        total_debt = sum(d["balance"] for d in debts_list)
+        total_min_payment = sum(d["min_payment"] for d in debts_list)
+        
+        # Metrics
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Debt", f"${total_debt:,.2f}")
+        col2.metric("Total Min Payment", f"${total_min_payment:,.2f}/mo")
+        col3.metric("Number of Debts", len(debts_list))
+        
+        st.divider()
+        
+        # Two columns: pie chart and debt list
+        col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.write(f"**{debt['name']}**")
+            st.subheader("Debt by Type")
+            
+            # Group by type
+            type_totals = {}
+            for debt in debts_list:
+                debt_type = debt["type"]
+                if debt_type not in type_totals:
+                    type_totals[debt_type] = 0
+                type_totals[debt_type] += debt["balance"]
+            
+            fig = px.pie(
+                values=list(type_totals.values()),
+                names=list(type_totals.keys()),
+                title="Total Balance by Debt Type",
+                hole=0.4
+            )
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig, use_container_width=True)
+        
         with col2:
-            st.write(debt['type'])
-        with col3:
-            st.write(f"${debt['balance']:,.2f}")
-        with col4:
-            st.write(f"{debt['apr']*100:.2f}%")
-        with col5:
-            st.write(f"${debt['min_payment']:,.2f}")
-        with col6:
-            if st.button("✏️", key=f"edit_{debt['id']}"):
-                st.session_state.editing_debt = debt
-                st.rerun()
-        with col7:
-            if st.button("🗑️", key=f"delete_{debt['id']}"):
-                if delete_debt_from_db(debt['id']):
+            st.subheader("All Debts")
+            
+            debt_summary = []
+            for debt in debts_list:
+                debt_summary.append({
+                    "Name": debt["name"],
+                    "Type": debt["type"],
+                    "Balance": f"${debt['balance']:,.2f}"
+                })
+            
+            st.dataframe(
+                pd.DataFrame(debt_summary),
+                use_container_width=True,
+                hide_index=True
+            )
+        
+        st.divider()
+        
+        # Payment reminders
+        st.subheader("📅 Upcoming Bills (Next 7 Days)")
+        upcoming = get_upcoming_bills(debts_list, days_ahead=7)
+        
+        if upcoming:
+            for bill in upcoming:
+                if bill["days_until"] == 0:
+                    st.warning(f"🔴 **{bill['name']}** - ${bill['amount']:,.2f} due **TODAY**")
+                elif bill["days_until"] == 1:
+                    st.info(f"🟡 **{bill['name']}** - ${bill['amount']:,.2f} due **tomorrow**")
+                else:
+                    st.info(f"🟢 **{bill['name']}** - ${bill['amount']:,.2f} due in **{bill['days_until']} days** ({bill['due_date'].strftime('%b %d')})")
+        else:
+            st.success("✅ No bills due in the next 7 days!")
+
+# -------------------------------------------------
+# PAGE: CREDIT CARDS
+# -------------------------------------------------
+elif page == "💳 My Credit Cards":
+    st.title("💳 My Credit Card Debts")
+    
+    credit_cards = [d for d in st.session_state.debts if d["type"] == "Credit Card"]
+    
+    # Add credit card form
+    with st.expander("➕ Add Credit Card", expanded=len(credit_cards) == 0):
+        with st.form("add_credit_card"):
+            name = st.text_input("Card Name (e.g., Chase Sapphire)")
+            balance = st.number_input("Current Balance ($)", min_value=0.0, format="%.2f")
+            apr = st.number_input("APR (%)", min_value=0.0, format="%.2f")
+            min_payment = st.number_input("Minimum Payment ($)", min_value=0.0, format="%.2f")
+            due_day = st.slider("Due Day of Month", 1, 28, 1)
+            status = st.selectbox("Status", ["Active", "Paid Off", "Closed"])
+            
+            submitted = st.form_submit_button("Add Credit Card")
+            
+            if submitted and name:
+                new_debt = {
+                    "name": name,
+                    "type": "Credit Card",
+                    "balance": balance,
+                    "apr": apr / 100,
+                    "min_payment": min_payment,
+                    "due_day": due_day,
+                    "status": status,
+                    "original_balance": balance
+                }
+                if save_debt_to_db(new_debt):
+                    st.success("✅ Credit card added!")
                     st.session_state.reload_debts = True
                     st.rerun()
     
     st.divider()
     
-    # Edit form
-    if st.session_state.get("editing_debt"):
-        debt = st.session_state.editing_debt
+    # Display credit cards
+    if credit_cards:
+        st.subheader("Your Credit Cards")
         
-        with st.expander("✏️ Edit Debt", expanded=True):
-            with st.form("edit_debt"):
-                name = st.text_input("Debt name", value=debt["name"])
-                debt_type = st.selectbox(
-                    "Debt type",
-                    ["Credit Card", "Student Loan", "Auto Loan", "Personal Loan", "Other"],
-                    index=["Credit Card", "Student Loan", "Auto Loan", "Personal Loan", "Other"].index(debt["type"])
-                )
-                balance = st.number_input("Balance ($)", min_value=0.0, value=float(debt["balance"]), format="%.2f")
-                apr = st.number_input("APR (%)", min_value=0.0, value=float(debt["apr"])*100, format="%.2f")
-                min_payment = st.number_input("Minimum Payment ($)", min_value=0.0, value=float(debt["min_payment"]), format="%.2f")
-                due_day = st.slider("Due day of month", 1, 28, int(debt["due_day"]))
+        for debt in credit_cards:
+            with st.container():
+                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 1.2, 1, 1, 1, 1, 0.6, 0.6])
                 
-                col1, col2 = st.columns(2)
                 with col1:
-                    save = st.form_submit_button("💾 Save Changes")
+                    st.write(f"**{debt['name']}**")
                 with col2:
-                    cancel = st.form_submit_button("❌ Cancel")
-                
-                if save and name:
-                    updated_debt = {
-                        "name": name,
-                        "type": debt_type,
-                        "balance": balance,
-                        "apr": apr / 100,
-                        "min_payment": min_payment,
-                        "due_day": due_day
-                    }
-                    if update_debt_in_db(debt['id'], updated_debt):
-                        st.success("✅ Changes saved!")
-                        st.session_state.editing_debt = None
-                        st.session_state.reload_debts = True
+                    st.write(f"${debt['balance']:,.2f}")
+                with col3:
+                    st.write(f"{debt['apr']*100:.1f}%")
+                with col4:
+                    st.write(f"${debt['min_payment']:,.2f}")
+                with col5:
+                    st.write(debt.get("status", "Active"))
+                with col6:
+                    st.write(f"Day {debt['due_day']}")
+                with col7:
+                    if st.button("✏️", key=f"edit_cc_{debt['id']}"):
+                        st.session_state.editing_debt = debt
                         st.rerun()
+                with col8:
+                    if st.button("🗑️", key=f"delete_cc_{debt['id']}"):
+                        if delete_debt_from_db(debt['id']):
+                            st.session_state.reload_debts = True
+                            st.rerun()
                 
-                if cancel:
-                    st.session_state.editing_debt = None
+                st.divider()
+        
+        # Edit form
+        if st.session_state.get("editing_debt") and st.session_state.editing_debt["type"] == "Credit Card":
+            debt = st.session_state.editing_debt
+            
+            with st.expander("✏️ Edit Credit Card", expanded=True):
+                with st.form("edit_credit_card"):
+                    name = st.text_input("Card Name", value=debt["name"])
+                    balance = st.number_input("Current Balance ($)", min_value=0.0, value=float(debt["balance"]), format="%.2f")
+                    apr = st.number_input("APR (%)", min_value=0.0, value=float(debt["apr"])*100, format="%.2f")
+                    min_payment = st.number_input("Minimum Payment ($)", min_value=0.0, value=float(debt["min_payment"]), format="%.2f")
+                    due_day = st.slider("Due Day of Month", 1, 28, int(debt["due_day"]))
+                    status = st.selectbox("Status", ["Active", "Paid Off", "Closed"], 
+                                        index=["Active", "Paid Off", "Closed"].index(debt.get("status", "Active")))
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        save = st.form_submit_button("💾 Save Changes")
+                    with col2:
+                        cancel = st.form_submit_button("❌ Cancel")
+                    
+                    if save and name:
+                        updated_debt = {
+                            "name": name,
+                            "type": "Credit Card",
+                            "balance": balance,
+                            "apr": apr / 100,
+                            "min_payment": min_payment,
+                            "due_day": due_day,
+                            "status": status,
+                            "original_balance": debt.get("original_balance", balance)
+                        }
+                        if update_debt_in_db(debt['id'], updated_debt):
+                            st.success("✅ Changes saved!")
+                            st.session_state.editing_debt = None
+                            st.session_state.reload_debts = True
+                            st.rerun()
+                    
+                    if cancel:
+                        st.session_state.editing_debt = None
+                        st.rerun()
+    else:
+        st.info("No credit cards added yet. Use the form above to add one!")
+
+# -------------------------------------------------
+# PAGE: LOANS
+# -------------------------------------------------
+elif page == "🏦 My Loans":
+    st.title("🏦 My Loans")
+    
+    loans = [d for d in st.session_state.debts if d["type"] != "Credit Card"]
+    
+    # Add loan form
+    with st.expander("➕ Add Loan", expanded=len(loans) == 0):
+        with st.form("add_loan"):
+            name = st.text_input("Loan Name (e.g., Auto Loan)")
+            loan_type = st.selectbox("Loan Type", ["Student Loan", "Auto Loan", "Personal Loan", "Other"])
+            original_balance = st.number_input("Original Loan Amount ($)", min_value=0.0, format="%.2f")
+            current_balance = st.number_input("Current Balance ($)", min_value=0.0, format="%.2f")
+            apr = st.number_input("APR (%)", min_value=0.0, format="%.2f")
+            min_payment = st.number_input("Monthly Payment ($)", min_value=0.0, format="%.2f")
+            due_day = st.slider("Due Day of Month", 1, 28, 1)
+            status = st.selectbox("Status", ["Active", "Paid Off", "Closed"])
+            
+            submitted = st.form_submit_button("Add Loan")
+            
+            if submitted and name:
+                new_debt = {
+                    "name": name,
+                    "type": loan_type,
+                    "balance": current_balance,
+                    "apr": apr / 100,
+                    "min_payment": min_payment,
+                    "due_day": due_day,
+                    "status": status,
+                    "original_balance": original_balance
+                }
+                if save_debt_to_db(new_debt):
+                    st.success("✅ Loan added!")
+                    st.session_state.reload_debts = True
                     st.rerun()
     
-    # -------------------------------------------------
-    # PAYOFF SETTINGS
-    # -------------------------------------------------
-    st.subheader("⚙️ Payoff Settings")
-    col1, col2 = st.columns(2)
+    st.divider()
     
-    # Calculate total minimum payment
-    total_min = sum(d["min_payment"] for d in debts_list)
+    # Display loans
+    if loans:
+        st.subheader("Your Loans")
+        
+        for debt in loans:
+            with st.container():
+                col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2, 1, 1.2, 1, 1, 1, 1, 0.6, 0.6])
+                
+                with col1:
+                    st.write(f"**{debt['name']}**")
+                with col2:
+                    st.write(debt['type'])
+                with col3:
+                    orig = debt.get('original_balance', debt['balance'])
+                    st.write(f"${orig:,.2f}")
+                with col4:
+                    st.write(f"${debt['balance']:,.2f}")
+                with col5:
+                    st.write(f"{debt['apr']*100:.1f}%")
+                with col6:
+                    st.write(f"${debt['min_payment']:,.2f}")
+                with col7:
+                    st.write(debt.get("status", "Active"))
+                with col8:
+                    if st.button("✏️", key=f"edit_loan_{debt['id']}"):
+                        st.session_state.editing_debt = debt
+                        st.rerun()
+                with col9:
+                    if st.button("🗑️", key=f"delete_loan_{debt['id']}"):
+                        if delete_debt_from_db(debt['id']):
+                            st.session_state.reload_debts = True
+                            st.rerun()
+                
+                st.divider()
+        
+        # Edit form
+        if st.session_state.get("editing_debt") and st.session_state.editing_debt["type"] != "Credit Card":
+            debt = st.session_state.editing_debt
+            
+            with st.expander("✏️ Edit Loan", expanded=True):
+                with st.form("edit_loan"):
+                    name = st.text_input("Loan Name", value=debt["name"])
+                    loan_type = st.selectbox("Loan Type", ["Student Loan", "Auto Loan", "Personal Loan", "Other"],
+                                           index=["Student Loan", "Auto Loan", "Personal Loan", "Other"].index(debt["type"]))
+                    original_balance = st.number_input("Original Loan Amount ($)", min_value=0.0, 
+                                                      value=float(debt.get("original_balance", debt["balance"])), format="%.2f")
+                    current_balance = st.number_input("Current Balance ($)", min_value=0.0, value=float(debt["balance"]), format="%.2f")
+                    apr = st.number_input("APR (%)", min_value=0.0, value=float(debt["apr"])*100, format="%.2f")
+                    min_payment = st.number_input("Monthly Payment ($)", min_value=0.0, value=float(debt["min_payment"]), format="%.2f")
+                    due_day = st.slider("Due Day of Month", 1, 28, int(debt["due_day"]))
+                    status = st.selectbox("Status", ["Active", "Paid Off", "Closed"],
+                                        index=["Active", "Paid Off", "Closed"].index(debt.get("status", "Active")))
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        save = st.form_submit_button("💾 Save Changes")
+                    with col2:
+                        cancel = st.form_submit_button("❌ Cancel")
+                    
+                    if save and name:
+                        updated_debt = {
+                            "name": name,
+                            "type": loan_type,
+                            "balance": current_balance,
+                            "apr": apr / 100,
+                            "min_payment": min_payment,
+                            "due_day": due_day,
+                            "status": status,
+                            "original_balance": original_balance
+                        }
+                        if update_debt_in_db(debt['id'], updated_debt):
+                            st.success("✅ Changes saved!")
+                            st.session_state.editing_debt = None
+                            st.session_state.reload_debts = True
+                            st.rerun()
+                    
+                    if cancel:
+                        st.session_state.editing_debt = None
+                        st.rerun()
+    else:
+        st.info("No loans added yet. Use the form above to add one!")
+
+# -------------------------------------------------
+# PAGE: PAYOFF PLANNER
+# -------------------------------------------------
+elif page == "📈 Payoff Planner":
+    st.title("📈 Payoff Planner")
     
-    with col1:
-        strategy = st.radio("Payoff Strategy", ["Snowball", "Avalanche"])
-        st.caption("**Snowball**: Pay off smallest balance first  \n**Avalanche**: Pay off highest APR first")
-    
-    with col2:
-        monthly_budget = st.number_input(
-            "Total Monthly Debt Budget ($)",
-            min_value=float(total_min),
-            value=float(total_min),
-            format="%.2f"
-        )
-        extra_payment = monthly_budget - total_min
-        st.caption(f"Extra payment: **${extra_payment:,.2f}** per month")
-    
-    # -------------------------------------------------
-    # CALCULATIONS
-    # -------------------------------------------------
-    balances, total_interest, months, schedule = calculate_payoff_schedule(debts_list, strategy, monthly_budget)
-    
-    if schedule:
-        payoff_date = (datetime.today() + relativedelta(months=months)).strftime("%B %Y")
+    if not st.session_state.debts:
+        st.info("Add some debts first to use the payoff planner!")
+    else:
+        debts_list = [d for d in st.session_state.debts if d.get("status", "Active") == "Active"]
         
-        st.subheader("📈 Payoff Results")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Payoff Date", payoff_date)
-        col2.metric("Months to Payoff", months)
-        col3.metric("Total Interest Paid", f"${total_interest:,.2f}")
-        
-        # -------------------------------------------------
-        # CHARTS
-        # -------------------------------------------------
-        st.subheader("📊 Payoff Visualization")
-        
-        schedule_df = pd.DataFrame(schedule)
-        
-        # Balance over time chart
-        fig = go.Figure()
-        
-        for debt in debts_list:
-            debt_name = debt["name"]
-            if debt_name in schedule_df.columns:
-                fig.add_trace(go.Scatter(
-                    x=schedule_df["Date"],
-                    y=schedule_df[debt_name],
-                    name=debt_name,
-                    mode='lines',
-                    stackgroup='one',
-                    fill='tonexty'
-                ))
-        
-        fig.update_layout(
-            title="Debt Balance Over Time",
-            xaxis_title="Month",
-            yaxis_title="Balance ($)",
-            hovermode='x unified',
-            height=400
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Create DataFrames for charts
-        chart_df = pd.DataFrame([{
-            'Name': d['name'],
-            'Balance': d['balance']
-        } for d in debts_list])
-        
-        # Debt breakdown pie chart
-        fig2 = px.pie(
-            chart_df,
-            values='Balance',
-            names='Name',
-            title='Current Debt Distribution',
-            hole=0.3
-        )
-        fig2.update_traces(textposition='inside', textinfo='percent+label')
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.plotly_chart(fig2, use_container_width=True)
-        
-        with col2:
-            # Interest by debt
-            interest_by_debt = []
-            for debt in debts_list:
-                total_int = debt['balance'] * (debt['apr'] / 12) * months
-                interest_by_debt.append({
-                    'Name': debt['name'],
-                    'Interest': total_int
+        if not debts_list:
+            st.warning("All your debts are marked as Paid Off or Closed. Update their status to plan payoffs.")
+        else:
+            total_min = sum(d["min_payment"] for d in debts_list)
+            
+            # Settings
+            st.subheader("⚙️ Payoff Strategy")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                strategy = st.radio(
+                    "Choose Strategy",
+                    ["Snowball", "Avalanche"],
+                    help="**Snowball**: Pay smallest balance first (psychological wins)\n\n**Avalanche**: Pay highest APR first (save more money)"
+                )
+            
+            with col2:
+                monthly_budget = st.number_input(
+                    "Monthly Debt Budget ($)",
+                    min_value=float(total_min),
+                    value=float(total_min),
+                    format="%.2f"
+                )
+            
+            st.divider()
+            
+            # What-if scenarios
+            st.subheader("🔮 What-If Scenarios")
+            
+            scenarios = {
+                "Current Plan": 0,
+                "+$50/month": 50,
+                "+$100/month": 100,
+                "+$200/month": 200,
+                "+$500/month": 500
+            }
+            
+            comparison_data = []
+            
+            for scenario_name, extra in scenarios.items():
+                _, interest, months, _ = calculate_payoff_schedule(debts_list, strategy, monthly_budget, extra)
+                payoff_date = (datetime.today() + relativedelta(months=months)).strftime("%b %Y")
+                
+                comparison_data.append({
+                    "Scenario": scenario_name,
+                    "Extra Payment": f"${extra:,.0f}",
+                    "Months": months,
+                    "Payoff Date": payoff_date,
+                    "Total Interest": f"${interest:,.2f}",
+                    "Interest Saved": f"${comparison_data[0]['Interest'] - interest:,.2f}" if comparison_data else "$0"
                 })
             
-            fig3 = px.bar(
-                pd.DataFrame(interest_by_debt),
-                x='Name',
-                y='Interest',
-                title='Estimated Interest by Debt',
-                labels={'Interest': 'Interest ($)'}
+            st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
+            
+            st.divider()
+            
+            # Snowball vs Avalanche comparison
+            st.subheader("⚖️ Strategy Comparison")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Snowball Method**")
+                _, snow_interest, snow_months, snow_schedule = calculate_payoff_schedule(debts_list, "Snowball", monthly_budget)
+                snow_payoff = (datetime.today() + relativedelta(months=snow_months)).strftime("%B %Y")
+                
+                st.metric("Payoff Date", snow_payoff)
+                st.metric("Months", snow_months)
+                st.metric("Total Interest", f"${snow_interest:,.2f}")
+            
+            with col2:
+                st.markdown("**Avalanche Method**")
+                _, aval_interest, aval_months, aval_schedule = calculate_payoff_schedule(debts_list, "Avalanche", monthly_budget)
+                aval_payoff = (datetime.today() + relativedelta(months=aval_months)).strftime("%B %Y")
+                
+                st.metric("Payoff Date", aval_payoff)
+                st.metric("Months", aval_months)
+                st.metric("Total Interest", f"${aval_interest:,.2f}")
+            
+            # Show savings
+            if snow_interest > aval_interest:
+                st.success(f"💰 Avalanche saves **${snow_interest - aval_interest:,.2f}** in interest!")
+            elif aval_interest > snow_interest:
+                st.success(f"💰 Snowball saves **${aval_interest - snow_interest:,.2f}** in interest!")
+            else:
+                st.info("Both strategies result in the same interest paid.")
+            
+            st.divider()
+            
+            # Visualization
+            st.subheader("📊 Payoff Timeline")
+            
+            schedule = snow_schedule if strategy == "Snowball" else aval_schedule
+            schedule_df = pd.DataFrame(schedule)
+            
+            fig = go.Figure()
+            
+            for debt in debts_list:
+                debt_name = debt["name"]
+                if debt_name in schedule_df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=schedule_df["Date"],
+                        y=schedule_df[debt_name],
+                        name=debt_name,
+                        mode='lines',
+                        stackgroup='one',
+                        fill='tonexty'
+                    ))
+            
+            fig.update_layout(
+                title=f"{strategy} Method - Debt Balance Over Time",
+                xaxis_title="Month",
+                yaxis_title="Balance ($)",
+                hovermode='x unified',
+                height=500
             )
-            st.plotly_chart(fig3, use_container_width=True)
-    
-    # -------------------------------------------------
-    # CALENDAR
-    # -------------------------------------------------
-    st.subheader("📅 Monthly Bill Calendar")
-    calendar_data = [{
-        'Name': d['name'],
-        'Type': d['type'],
-        'Min Payment': f"${d['min_payment']:,.2f}",
-        'Due Date': f"{d['due_day']}th of each month"
-    } for d in sorted(debts_list, key=lambda x: x['due_day'])]
-    
-    st.dataframe(
-        pd.DataFrame(calendar_data), 
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    # -------------------------------------------------
-    # EXPORT & CLEAR
-    # -------------------------------------------------
-    st.divider()
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # Export to CSV
-        if schedule:
-            csv = pd.DataFrame(schedule).to_csv(index=False)
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Export
+            st.divider()
+            csv = schedule_df.to_csv(index=False)
             st.download_button(
                 label="📥 Download Payment Schedule (CSV)",
                 data=csv,
-                file_name=f"debt_payoff_schedule_{datetime.today().strftime('%Y%m%d')}.csv",
+                file_name=f"payoff_schedule_{strategy.lower()}_{datetime.today().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
-    
-    with col3:
-        if st.button("🗑️ Clear All Data", type="secondary"):
-            if st.session_state.get("confirm_clear"):
-                if clear_all_debts_from_db():
-                    st.session_state.debts = []
-                    st.session_state.editing_debt = None
-                    st.session_state.confirm_clear = False
-                    st.success("✅ All data cleared!")
-                    st.rerun()
-            else:
-                st.session_state.confirm_clear = True
-                st.warning("⚠️ Click again to confirm deletion")
-
-else:
-    st.info("👆 Add at least one debt to get started using the form above!")
