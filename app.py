@@ -2,15 +2,22 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from streamlit_local_storage import LocalStorage
 
 st.set_page_config(page_title="Debt Payoff Planner", layout="wide")
 
 st.title("💳 Debt Payoff Planner")
 
+local_storage = LocalStorage()
+
 # -------------------------
-# LOAD / SAVE STATE
+# LOAD FROM LOCAL STORAGE
 # -------------------------
-if "debts" not in st.session_state:
+stored_debts = local_storage.getItem("debts")
+
+if stored_debts and "debts" not in st.session_state:
+    st.session_state.debts = stored_debts
+elif "debts" not in st.session_state:
     st.session_state.debts = []
 
 # -------------------------
@@ -19,7 +26,10 @@ if "debts" not in st.session_state:
 with st.expander("➕ Add a Debt", expanded=True):
     with st.form("add_debt"):
         name = st.text_input("Debt name")
-        debt_type = st.selectbox("Debt type", ["Credit Card", "Student Loan", "Auto Loan", "Personal Loan", "Other"])
+        debt_type = st.selectbox(
+            "Debt type",
+            ["Credit Card", "Student Loan", "Auto Loan", "Personal Loan", "Other"]
+        )
         balance = st.number_input("Balance ($)", min_value=0.0)
         apr = st.number_input("APR (%)", min_value=0.0)
         min_payment = st.number_input("Minimum Payment ($)", min_value=0.0)
@@ -36,6 +46,7 @@ with st.expander("➕ Add a Debt", expanded=True):
                 "MinPayment": min_payment,
                 "DueDay": due_day
             })
+            local_storage.setItem("debts", st.session_state.debts)
             st.success("Debt added!")
 
 # -------------------------
@@ -47,11 +58,7 @@ if st.session_state.debts:
     st.subheader("📋 Your Debts")
     st.dataframe(df, use_container_width=True)
 
-    # -------------------------
-    # PAYOFF SETTINGS
-    # -------------------------
     st.subheader("⚙️ Payoff Settings")
-
     strategy = st.radio("Payoff Strategy", ["Snowball", "Avalanche"])
     monthly_budget = st.number_input(
         "Total Monthly Debt Budget ($)",
@@ -59,15 +66,11 @@ if st.session_state.debts:
         value=float(df["MinPayment"].sum())
     )
 
-    # Sort debts
     if strategy == "Snowball":
         df = df.sort_values("Balance")
     else:
         df = df.sort_values("APR", ascending=False)
 
-    # -------------------------
-    # PAYOFF SIMULATION
-    # -------------------------
     balances = df.copy()
     current_date = datetime.today()
     total_interest = 0
@@ -97,27 +100,24 @@ if st.session_state.debts:
         months += 1
         current_date += relativedelta(months=1)
 
-    payoff_date = current_date.strftime("%B %Y")
-
-    # -------------------------
-    # RESULTS
-    # -------------------------
     st.subheader("📈 Payoff Results")
-
     col1, col2, col3 = st.columns(3)
-    col1.metric("Payoff Date", payoff_date)
+    col1.metric("Payoff Date", current_date.strftime("%B %Y"))
     col2.metric("Months to Payoff", months)
     col3.metric("Total Interest Paid", f"${total_interest:,.2f}")
 
-    # -------------------------
-    # CALENDAR VIEW
-    # -------------------------
     st.subheader("📅 Monthly Bill Calendar")
-
     calendar = df[["Name", "Type", "MinPayment", "DueDay"]].copy()
     calendar["Due"] = calendar["DueDay"].apply(lambda x: f"Every month on the {x}th")
-
     st.dataframe(calendar, use_container_width=True)
+
+    # -------------------------
+    # CLEAR DATA BUTTON
+    # -------------------------
+    if st.button("🗑️ Clear All Data"):
+        local_storage.deleteItem("debts")
+        st.session_state.debts = []
+        st.experimental_rerun()
 
 else:
     st.info("Add at least one debt to get started.")
