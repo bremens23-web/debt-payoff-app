@@ -437,7 +437,7 @@ elif page == "💳 My Credit Cards":
             
             st.divider()
             with st.expander("✏️ Edit Credit Card", expanded=True):
-                with st.form("edit_credit_card", clear_on_submit=False):
+                with st.form(f"edit_credit_card_{debt['id']}", clear_on_submit=False):
                     name = st.text_input("Card Name", value=debt["name"])
                     credit_limit = st.number_input("Credit Limit ($)", min_value=0.0, 
                                                   value=float(debt.get("credit_limit", 0)), format="%.2f")
@@ -454,31 +454,31 @@ elif page == "💳 My Credit Cards":
                         save = st.form_submit_button("💾 Save Changes", use_container_width=True, type="primary")
                     with col2:
                         cancel = st.form_submit_button("❌ Cancel", use_container_width=True)
-                    
-                    if save:
-                        if name:
-                            updated_debt = {
-                                "name": name,
-                                "type": "Credit Card",
-                                "balance": balance,
-                                "apr": apr / 100,
-                                "min_payment": min_payment,
-                                "due_day": due_day,
-                                "status": status,
-                                "original_balance": debt.get("original_balance", balance),
-                                "credit_limit": credit_limit
-                            }
-                            if update_debt_in_db(debt['id'], updated_debt):
-                                st.success("✅ Changes saved!")
-                                st.session_state.editing_debt = None
-                                st.session_state.reload_debts = True
-                                st.rerun()
-                        else:
-                            st.error("Card name is required!")
-                    
-                    if cancel:
-                        st.session_state.editing_debt = None
-                        st.rerun()
+                
+                if save:
+                    if name:
+                        updated_debt = {
+                            "name": name,
+                            "type": "Credit Card",
+                            "balance": balance,
+                            "apr": apr / 100,
+                            "min_payment": min_payment,
+                            "due_day": due_day,
+                            "status": status,
+                            "original_balance": debt.get("original_balance", balance),
+                            "credit_limit": credit_limit
+                        }
+                        if update_debt_in_db(debt['id'], updated_debt):
+                            st.success("✅ Changes saved!")
+                            st.session_state.editing_debt = None
+                            st.session_state.reload_debts = True
+                            st.rerun()
+                    else:
+                        st.error("Card name is required!")
+                
+                if cancel:
+                    st.session_state.editing_debt = None
+                    st.rerun()
     else:
         st.info("No credit cards added yet. Use the form above to add one!")
 
