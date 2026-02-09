@@ -389,14 +389,15 @@ elif page == "💳 My Credit Cards":
         # Create table with utilization
         card_data = []
         for debt in credit_cards:
-            credit_limit = debt.get('credit_limit', 0)
-            utilization = (debt['balance'] / credit_limit * 100) if credit_limit > 0 else 0
+            credit_limit = debt.get('credit_limit', 0) or 0  # Handle None or missing
+            balance = debt.get('balance', 0) or 0
+            utilization = (balance / credit_limit * 100) if credit_limit > 0 else 0
             
             card_data.append({
                 "Name": debt['name'],
-                "Balance": f"${debt['balance']:,.2f}",
-                "Credit Limit": f"${credit_limit:,.2f}",
-                "Utilization": f"{utilization:.1f}%",
+                "Balance": f"${balance:,.2f}",
+                "Credit Limit": f"${credit_limit:,.2f}" if credit_limit > 0 else "Not Set",
+                "Utilization": f"{utilization:.1f}%" if credit_limit > 0 else "N/A",
                 "APR": f"{debt['apr']*100:.1f}%",
                 "Min Payment": f"${debt['min_payment']:,.2f}",
                 "Status": debt.get("status", "Active"),
