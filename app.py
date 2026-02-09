@@ -354,10 +354,11 @@ elif page == "💳 My Credit Cards":
     with st.expander("➕ Add Credit Card", expanded=len(credit_cards) == 0):
         with st.form("add_credit_card"):
             name = st.text_input("Card Name (e.g., Chase Sapphire)")
+            credit_limit = st.number_input("Credit Limit ($)", min_value=0.0, format="%.2f")
             balance = st.number_input("Current Balance ($)", min_value=0.0, format="%.2f")
             apr = st.number_input("APR (%)", min_value=0.0, format="%.2f")
             min_payment = st.number_input("Minimum Payment ($)", min_value=0.0, format="%.2f")
-            due_day = st.slider("Due Day of Month", 1, 28, 1)
+            due_day = st.slider("Due Day of Month", 1, 31, 1)
             status = st.selectbox("Status", ["Active", "Paid Off", "Closed"])
             
             submitted = st.form_submit_button("Add Credit Card")
@@ -371,7 +372,8 @@ elif page == "💳 My Credit Cards":
                     "min_payment": min_payment,
                     "due_day": due_day,
                     "status": status,
-                    "original_balance": balance
+                    "original_balance": balance,
+                    "credit_limit": credit_limit
                 }
                 if save_debt_to_db(new_debt):
                     st.success("✅ Credit card added!")
@@ -384,33 +386,49 @@ elif page == "💳 My Credit Cards":
     if credit_cards:
         st.subheader("Your Credit Cards")
         
+        # Create table with utilization
+        card_data = []
         for debt in credit_cards:
-            with st.container():
-                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 1.2, 1, 1, 1, 1, 0.6, 0.6])
-                
-                with col1:
-                    st.write(f"**{debt['name']}**")
-                with col2:
-                    st.write(f"${debt['balance']:,.2f}")
-                with col3:
-                    st.write(f"{debt['apr']*100:.1f}%")
-                with col4:
-                    st.write(f"${debt['min_payment']:,.2f}")
-                with col5:
-                    st.write(debt.get("status", "Active"))
-                with col6:
-                    st.write(f"Day {debt['due_day']}")
-                with col7:
-                    if st.button("✏️", key=f"edit_cc_{debt['id']}"):
-                        st.session_state.editing_debt = debt
+            credit_limit = debt.get('credit_limit', 0)
+            utilization = (debt['balance'] / credit_limit * 100) if credit_limit > 0 else 0
+            
+            card_data.append({
+                "Name": debt['name'],
+                "Balance": f"${debt['balance']:,.2f}",
+                "Credit Limit": f"${credit_limit:,.2f}",
+                "Utilization": f"{utilization:.1f}%",
+                "APR": f"{debt['apr']*100:.1f}%",
+                "Min Payment": f"${debt['min_payment']:,.2f}",
+                "Status": debt.get("status", "Active"),
+                "Due Day": f"Day {debt['due_day']}",
+                "id": debt['id']
+            })
+        
+        # Display table
+        df_display = pd.DataFrame(card_data)
+        st.dataframe(
+            df_display.drop(columns=['id']),
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        st.divider()
+        
+        # Edit/Delete buttons
+        st.subheader("Manage Cards")
+        for i, debt in enumerate(credit_cards):
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.write(f"**{debt['name']}**")
+            with col2:
+                if st.button("✏️ Edit", key=f"edit_cc_{debt['id']}"):
+                    st.session_state.editing_debt = debt
+                    st.rerun()
+            with col3:
+                if st.button("🗑️ Delete", key=f"delete_cc_{debt['id']}"):
+                    if delete_debt_from_db(debt['id']):
+                        st.session_state.reload_debts = True
                         st.rerun()
-                with col8:
-                    if st.button("🗑️", key=f"delete_cc_{debt['id']}"):
-                        if delete_debt_from_db(debt['id']):
-                            st.session_state.reload_debts = True
-                            st.rerun()
-                
-                st.divider()
         
         # Edit form
         if st.session_state.get("editing_debt") and st.session_state.editing_debt["type"] == "Credit Card":
@@ -419,10 +437,12 @@ elif page == "💳 My Credit Cards":
             with st.expander("✏️ Edit Credit Card", expanded=True):
                 with st.form("edit_credit_card"):
                     name = st.text_input("Card Name", value=debt["name"])
+                    credit_limit = st.number_input("Credit Limit ($)", min_value=0.0, 
+                                                  value=float(debt.get("credit_limit", 0)), format="%.2f")
                     balance = st.number_input("Current Balance ($)", min_value=0.0, value=float(debt["balance"]), format="%.2f")
                     apr = st.number_input("APR (%)", min_value=0.0, value=float(debt["apr"])*100, format="%.2f")
                     min_payment = st.number_input("Minimum Payment ($)", min_value=0.0, value=float(debt["min_payment"]), format="%.2f")
-                    due_day = st.slider("Due Day of Month", 1, 28, int(debt["due_day"]))
+                    due_day = st.slider("Due Day of Month", 1, 31, int(debt["due_day"]))
                     status = st.selectbox("Status", ["Active", "Paid Off", "Closed"], 
                                         index=["Active", "Paid Off", "Closed"].index(debt.get("status", "Active")))
                     
@@ -441,7 +461,8 @@ elif page == "💳 My Credit Cards":
                             "min_payment": min_payment,
                             "due_day": due_day,
                             "status": status,
-                            "original_balance": debt.get("original_balance", balance)
+                            "original_balance": debt.get("original_balance", balance),
+                            "credit_limit": credit_limit
                         }
                         if update_debt_in_db(debt['id'], updated_debt):
                             st.success("✅ Changes saved!")
@@ -472,7 +493,7 @@ elif page == "🏦 My Loans":
             current_balance = st.number_input("Current Balance ($)", min_value=0.0, format="%.2f")
             apr = st.number_input("APR (%)", min_value=0.0, format="%.2f")
             min_payment = st.number_input("Monthly Payment ($)", min_value=0.0, format="%.2f")
-            due_day = st.slider("Due Day of Month", 1, 28, 1)
+            due_day = st.slider("Due Day of Month", 1, 31, 1)
             status = st.selectbox("Status", ["Active", "Paid Off", "Closed"])
             
             submitted = st.form_submit_button("Add Loan")
@@ -544,7 +565,7 @@ elif page == "🏦 My Loans":
                     current_balance = st.number_input("Current Balance ($)", min_value=0.0, value=float(debt["balance"]), format="%.2f")
                     apr = st.number_input("APR (%)", min_value=0.0, value=float(debt["apr"])*100, format="%.2f")
                     min_payment = st.number_input("Monthly Payment ($)", min_value=0.0, value=float(debt["min_payment"]), format="%.2f")
-                    due_day = st.slider("Due Day of Month", 1, 28, int(debt["due_day"]))
+                    due_day = st.slider("Due Day of Month", 1, 31, int(debt["due_day"]))
                     status = st.selectbox("Status", ["Active", "Paid Off", "Closed"],
                                         index=["Active", "Paid Off", "Closed"].index(debt.get("status", "Active")))
                     
@@ -592,7 +613,7 @@ elif page == "📄 Bills":
         with st.form("add_bill"):
             name = st.text_input("Bill Name (e.g., Electric, Netflix, Car Insurance)")
             amount = st.number_input("Monthly Amount ($)", min_value=0.0, format="%.2f")
-            due_day = st.slider("Due Day of Month", 1, 28, 1)
+            due_day = st.slider("Due Day of Month", 1, 31, 1)
             category = st.selectbox("Category", ["Utilities", "Subscription", "Insurance", "Phone/Internet", "Rent/Mortgage", "Other"])
             auto_pay = st.checkbox("Auto-pay enabled")
             status = st.selectbox("Status", ["Active", "Paused", "Cancelled"])
@@ -680,7 +701,7 @@ elif page == "📄 Bills":
                 with st.form("edit_bill"):
                     name = st.text_input("Bill Name", value=bill["name"])
                     amount = st.number_input("Monthly Amount ($)", min_value=0.0, value=float(bill["min_payment"]), format="%.2f")
-                    due_day = st.slider("Due Day of Month", 1, 28, int(bill["due_day"]))
+                    due_day = st.slider("Due Day of Month", 1, 31, int(bill["due_day"]))
                     category = st.selectbox("Category", ["Utilities", "Subscription", "Insurance", "Phone/Internet", "Rent/Mortgage", "Other"],
                                           index=["Utilities", "Subscription", "Insurance", "Phone/Internet", "Rent/Mortgage", "Other"].index(bill.get("category", "Other")))
                     auto_pay = st.checkbox("Auto-pay enabled", value=bill.get("auto_pay", False))
